@@ -115,8 +115,8 @@ class ChatGPTAccountsTests(unittest.TestCase):
         reopened = ChatGPT(Store(str(self.path), self.key), self.http)
         self.assertEqual(reopened.accounts.get('org', account['account_id']), changed)
 
-    def test_empty_logs_and_no_execution_claim(self):
+    def test_empty_logs_and_image_execution_capability(self):
         logs = self.client.post('/v1/calls/search', headers=self.headers, json={})
         self.assertEqual(logs.status_code, 200)
         self.assertEqual(logs.json()['items'], [])
-        self.assertEqual(self.client.get('/health').json()['execution_capabilities'], [])
+        self.assertEqual(self.client.get('/health').json()['execution_capabilities'], ['image'])

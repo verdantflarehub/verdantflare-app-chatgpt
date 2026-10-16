@@ -45,6 +45,8 @@ class Calls:
                   ON channel_calls(organization_id, quota_subject_id);
             ''')
             columns = {row['name'] for row in db.execute('PRAGMA table_info(channel_calls)')}
+            if 'action' not in columns:
+                db.execute("ALTER TABLE channel_calls ADD COLUMN action TEXT NOT NULL DEFAULT 'generate'")
             if 'finished_at' not in columns:
                 db.execute('ALTER TABLE channel_calls ADD COLUMN finished_at TEXT')
             if 'reservation_unknown' not in columns:
@@ -64,7 +66,7 @@ class Calls:
         return {'schema_version': 1, 'call_id': row['id'], 'task_id': row['task_id'],
                 'account_id': row['account_id'], 'model_id': row['model_id'],
                 'account_name': row.get('account_name'), 'account_status': row.get('account_status'),
-                'media': 'image', 'operation': 'generate', 'duration_seconds': elapsed,
+                'media': 'image', 'operation': row.get('action', 'generate'), 'duration_seconds': elapsed,
                 'duration_source': 'local_elapsed' if elapsed is not None else 'unknown',
                 'state': row['state'], 'accepted': None if row['accepted'] is None else bool(row['accepted']),
                 'revision': row['revision'], 'reason_code': None,
@@ -148,14 +150,16 @@ class Calls:
                 'summary': {'task_count': len(amounts), 'budget': total('budget_amount'),
                             'settlement': total('settlement_amount')}}
 
-    def reserve(self, organization, caller, operation, task, model, payload, account_id, ceiling):
+    def reserve(self, organization, caller, operation, task, model, payload, account_id, ceiling, *, action="generate"):
+        if action not in {'generate', 'edit'}:
+            raise ValueError('invalid_operation')
         # A ceiling is a reservation, never a fabricated preflight estimate or settlement.
         if ceiling is None:
             raise Conflict('cost_unknown')
         ceiling = amount(ceiling)
         if Decimal(ceiling) <= 0:
             raise Conflict('cost_unknown')
-        canonical = json.dumps([task, model, payload, account_id, ceiling],
+        canonical = json.dumps([task, model, payload, account_id, ceiling, action],
                                sort_keys=True, separators=(',', ':'), ensure_ascii=False)
         digest = hashlib.sha256(canonical.encode()).hexdigest()
         with self.store.connect() as db:
@@ -177,8 +181,6 @@ class Calls:
                 raise Conflict('account_disabled')
             if account['authorization_state'] != 'active':
                 raise Conflict('authorization_not_verified')
-            if json.loads(account['proxy_json']) != {'mode': 'direct'}:
-                raise Conflict('proxy_unavailable')
             # All keys sharing a quota subject share the same locked accounting boundary.
             peers = db.execute('SELECT registration_json FROM channel_accounts WHERE organization_id=? AND quota_subject_id=?',
                                (organization, account['quota_subject_id'])).fetchall()
@@ -204,11 +206,11 @@ class Calls:
             call_id, timestamp = str(uuid.uuid4()), now()
             db.execute('''INSERT INTO channel_calls
                 (id,organization_id,caller_id,operation_id,digest,task_id,account_id,credential_version,
-                 quota_subject_id,model_id,state,reservation_amount,created_at,updated_at,api_url,proxy_json)
-                VALUES (?,?,?,?,?,?,?,?,?,?,'acceptance_unknown',?,?,?,?,?)''',
+                 quota_subject_id,model_id,state,reservation_amount,created_at,updated_at,api_url,proxy_json,action)
+                VALUES (?,?,?,?,?,?,?,?,?,?,'acceptance_unknown',?,?,?,?,?,?)''',
                 (call_id, organization, caller, operation, digest, task, account['id'],
                  account['credential_version'], account['quota_subject_id'], model, ceiling, timestamp, timestamp,
-                 account['api_url'], account['proxy_json']))
+                 account['api_url'], account['proxy_json'], action))
             return dict(db.execute('SELECT * FROM channel_calls WHERE id=?', (call_id,)).fetchone()), True
 
     def credential(self, row):
