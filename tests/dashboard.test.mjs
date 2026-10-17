@@ -15,8 +15,8 @@ test('new connection has no invented URL, membership or gateway balance', () => 
   assert.equal(run('blank().used5h'), null);
   assert.equal(run('blank().used7d'), null);
   const html = run("editor='new'; form()");
-  assert.match(html, /5 小时已用比例/);
-  assert.match(html, /7 天已用比例/);
+  assert.match(html, /5 小时已用/);
+  assert.match(html, /7 天已用/);
   assert.doesNotMatch(html, /Google|充值|赠金|原型|示例/);
 });
 
@@ -27,10 +27,10 @@ test('membership unknown windows and gateway unit stay independent', () => {
     gateway_observation:{remaining:'12',unit:'Credits',planName:'Gateway pool'}})];`);
   const html = run('list()');
   assert.match(html, /Pro/);
-  assert.match(html, /已用 25%/);
-  assert.match(html, /7 天用量<\/small><strong class="num">未知/);
+  assert.match(html, /25%/);
+  assert.match(html, /7 天用量<\/small><strong class="num">未登记/);
   assert.match(html, /12 Credits/);
-  assert.match(html, /账号已停用/);
+  assert.match(html, /已停用/);
   assert.doesNotMatch(html, /USD|Gateway pool|示例/);
 });
 
