@@ -23,6 +23,7 @@ from .calls import Calls
 from .execution import Execution
 from .dashboard import DashboardAssets
 from .ownership import execution_owner
+from .discovery_lifecycle import configured_publisher, PublicationLifetime, serve_owned_servers
 from .proxy import NetworkProxies, ProxyUnavailable, proxy_reference
 
 IDENTITY = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}')
@@ -69,6 +70,7 @@ async def body(request, limit=32768):
 
 class ChatGPT:
     def __init__(self, store, client=None, *, network=None):
+        self.accepting = True
         self.accounts = Accounts(store)
         self.calls = Calls(store)
         self.client = client or httpx.Client(follow_redirects=False, timeout=15, trust_env=False)
@@ -296,6 +298,9 @@ def create_execution(service, token):
             if not IDENTITY.fullmatch(org) or caller != 'image-mcp':
                 raise APIError('forbidden', 403)
             if request.method == 'POST':
+                if not service.accepting:
+                    return response({'error': 'channel_unavailable', 'schema_version': 1,
+                                     'accepted': False, 'state': 'rejected'}, 503)
                 value = await body(request, 64 * 1024 * 1024)
                 if set(value) - {'idempotency_key', 'task_id', 'model_id', 'capability', 'payload', 'account_id', 'budget_limit'}:
                     raise ValueError('invalid_request')
@@ -339,13 +344,38 @@ async def main():
         if min(len(management_token), len(execution_token)) < 32 or hmac.compare_digest(management_token, execution_token):
             raise ValueError('independent_listener_tokens_required')
         apps = [(create_app(service, management_token), 8000), (create_execution(service, execution_token), 8001)]
-        servers = [uvicorn.Server(uvicorn.Config(app, host='0.0.0.0', port=port, access_log=False)) for app, port in apps]
+        publisher = configured_publisher(os.environ, service.accounts.store, __version__)
+        lifetime = None
+
+        class ChannelServer(uvicorn.Server):
+            def handle_exit(self, sig, frame):
+                service.accepting = False
+                if lifetime:
+                    lifetime.begin_draining()
+                super().handle_exit(sig, frame)
+                for server in servers:
+                    server.should_exit = True
+                    server.force_exit = self.force_exit
+
+        servers = [ChannelServer(uvicorn.Config(app, host='0.0.0.0', port=port, access_log=False)) for app, port in apps]
+        publication_task = None
+        if publisher:
+            lifetime = PublicationLifetime(publisher, servers, lambda value: setattr(service, 'accepting', value))
+            publication_task = asyncio.create_task(lifetime.run())
         try:
-            await asyncio.gather(*(server.serve() for server in servers))
+            def begin_draining():
+                service.accepting = False
+                if lifetime:
+                    lifetime.begin_draining()
+            await serve_owned_servers(servers, begin_draining)
         finally:
-            service.client.close()
-            if network:
-                network.close()
+            try:
+                if lifetime:
+                    await lifetime.finish(publication_task)
+            finally:
+                service.client.close()
+                if network:
+                    network.close()
 
 
 if __name__ == '__main__':
