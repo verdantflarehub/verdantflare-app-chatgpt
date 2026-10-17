@@ -227,8 +227,8 @@
       width: 44px;
       height: 44px;
       border-radius: 12px;
-      color: var(--accent);
-      background: var(--accent-soft);
+      color: var(--text);
+      background: transparent;
       font-weight: 700;
       font-size: 20px
     }
@@ -1241,3 +1241,5 @@
       .budget-tooltip { position: relative; display: inline-flex; align-items: center; gap: 5px; cursor: help; outline-offset: 4px; }
     .budget-tooltip [role="tooltip"] { display: none; position: absolute; top: calc(100% + 6px); right: 0; z-index: 5; padding: 7px 10px; border-radius: 6px; background: var(--ink); color: var(--bg); font-size: 12px; font-weight: 400; white-space: nowrap; box-shadow: var(--vf-shadow-popover); }
     .budget-tooltip:hover [role="tooltip"], .budget-tooltip:focus [role="tooltip"] { display: block; }
+
+.mark > svg { width: 32px; height: 32px; display: block; }
