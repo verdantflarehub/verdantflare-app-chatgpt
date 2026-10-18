@@ -53,7 +53,9 @@ test('v0.2 full-width layout, top breadcrumb, official brand logo and zero retur
   const formHtml = run("editor='new'; form()");
   assert.ok(index.indexOf('id="appBreadcrumb"') < index.indexOf('class="topline"'));
   assert.match(index, /viewBox="0 0 24 24"/);
+  assert.doesNotMatch(index, /渠道管理<\/span>/);
   assert.match(css, /\.viewport\s*\{[^}]*max-width:\s*none/);
+  assert.match(css, /\.viewport\s*\{[^}]*padding:\s*0/);
   assert.match(css, /\.g-form\s*\{[^}]*max-width:\s*none/);
   assert.doesNotMatch(formHtml, /data-cancel|>返回概览<|>取消</);
 });
