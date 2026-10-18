@@ -45,3 +45,16 @@ test('logs preserve units and separate budget from settlement', () => {
   assert.match(html, /生成前估算/);
   assert.doesNotMatch(html, /USD|详情/);
 });
+
+test('v0.2 full-width layout, top breadcrumb, official brand logo and zero return buttons', () => {
+  const index = readFileSync(new URL('../dashboard/index.html', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../dashboard/dashboard.css', import.meta.url), 'utf8');
+  const run = page();
+  const formHtml = run("editor='new'; form()");
+  assert.ok(index.indexOf('id="appBreadcrumb"') < index.indexOf('class="topline"'));
+  assert.match(index, /viewBox="0 0 24 24"/);
+  assert.match(css, /\.viewport\s*\{[^}]*max-width:\s*none/);
+  assert.match(css, /\.g-form\s*\{[^}]*max-width:\s*none/);
+  assert.doesNotMatch(formHtml, /data-cancel|>返回概览<|>取消</);
+});
+
