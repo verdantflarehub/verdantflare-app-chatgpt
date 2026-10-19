@@ -14,10 +14,13 @@ def configured_publisher(env, store, version):
         return None
     if not endpoint or not scope:
         raise ValueError('incomplete_discovery_configuration')
-    config = Config(endpoint, scope, env.get('ETCD_USERNAME', ''), env.get('ETCD_PASSWORD', ''))
+    execution_url = env.get('CHANNEL_DISCOVERY_EXECUTION_URL',
+                            'http://chatgpt-channel.verdantflare-app.svc.cluster.local:8001')
+    config = Config(endpoint, scope, env.get('ETCD_USERNAME', ''), env.get('ETCD_PASSWORD', ''),
+                    execution_url=execution_url)
     return Publisher(config, store, version, [{
         'capability_id': capability, 'adapter_version': '1',
-        'execution_state': 'adapter_connected_unverified'}
+        'execution_state': 'enabled'}
         for capability in ('image.generate', 'image.edit')])
 
 
