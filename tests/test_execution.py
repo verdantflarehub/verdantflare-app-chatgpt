@@ -142,3 +142,9 @@ class ExecutionTest(unittest.TestCase):
         self.assertEqual(self.api.get('/v1/calls/' + result['call_id'] + '/result', headers=foreign).status_code, 404)
         wrong = {**self.headers, 'X-Caller-Id': 'video-mcp'}
         self.assertEqual(self.api.get('/v1/calls/' + result['call_id'], headers=wrong).status_code, 403)
+
+    def test_flare_model_supported_by_default(self):
+        res = self.submit('flare-task', model_id='gpt-image-2.5-flare', payload={'prompt': 'concept sketch'})
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(res.json()['state'], 'completed')
+        self.assertTrue(res.json()['accepted'])

@@ -16,6 +16,7 @@ from .store import Conflict, now
 
 # Compatibility identifiers from Image's existing CodexProvider, not new model claims.
 MODEL = 'gpt-image-2.5-sunburst'
+DEFAULT_MODELS = 'gpt-image-2.5-sunburst,gpt-image-2.5-flare'
 MODELS = {MODEL, 'gpt-image-2.5-flare', 'gpt-image-2'}
 INSTRUCTIONS = (
     "When invoking the image_generation tool, use the user's image prompt verbatim. "
@@ -126,7 +127,7 @@ def read_result(response, streaming):
 class Execution:
     def __init__(self, calls, client, *, transport=None):
         self.calls, self.client, self.transport = calls, client, transport
-        self.models = set(os.environ.get('CHATGPT_IMAGE_MODELS', MODEL).split(','))
+        self.models = {m.strip() for m in os.environ.get('CHATGPT_IMAGE_MODELS', DEFAULT_MODELS).split(',') if m.strip()}
         if not self.models or not self.models <= MODELS:
             raise ValueError('invalid_image_models')
         self.prefer_responses = os.environ.get('CHATGPT_PREFER_RESPONSES', 'false').lower() in {'true', '1', 'yes'}
