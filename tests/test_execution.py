@@ -1,6 +1,8 @@
 import base64
 import io
 import json
+from email.parser import BytesParser
+from email.policy import default
 from pathlib import Path
 import tempfile
 import unittest
@@ -80,16 +82,45 @@ class ExecutionTest(unittest.TestCase):
 
     def test_multipart_multiple_references_and_mask_preserve_edit_route(self):
         self.service.execution.prefer_responses = True
-        result = self.submit(payload={'prompt': 'edit', 'action': 'edit', 'images': [REFERENCE, REFERENCE],
-            'mask': REFERENCE, 'quality': 'auto', 'prefer_4k': True}).json()
+        sources = []
+        for color in [(10, 20, 30), (40, 50, 60), (70, 80, 90)]:
+            encoded = io.BytesIO()
+            Image.new('RGB', (2, 3), color).save(encoded, format='PNG')
+            sources.append({'mime_type': 'image/png', 'data': base64.b64encode(encoded.getvalue()).decode()})
+        encoded_mask = io.BytesIO()
+        Image.new('RGBA', (2, 3), (0, 0, 0, 0)).save(encoded_mask, format='PNG')
+        mask = {'mime_type': 'image/png', 'data': base64.b64encode(encoded_mask.getvalue()).decode()}
+        result = self.submit(payload={'prompt': 'edit', 'action': 'edit', 'images': sources,
+            'mask': mask, 'quality': 'auto', 'prefer_4k': True}).json()
         self.assertEqual(result['state'], 'completed')
         self.assertEqual(result['operation'], 'edit')
         request = self.requests[0]
         self.assertEqual(request.url.path, '/v1/images/edits')
         self.assertIn('multipart/form-data', request.headers['content-type'])
-        for field in (b'name="image"', b'name="image_1"', b'name="mask"', b'3840x2160'):
-            self.assertIn(field, request.content)
+        message = BytesParser(policy=default).parsebytes(
+            ('Content-Type: ' + request.headers['content-type'] + '\r\n\r\n').encode() + request.content)
+        accepted, masks = [], []
+        for part in message.iter_parts():
+            name = part.get_param('name', header='content-disposition')
+            if part.get_filename() and (name == 'image' or name.startswith('image[')):
+                accepted.append(part.get_payload(decode=True))
+            if name == 'mask':
+                masks.append(part.get_payload(decode=True))
+        self.assertEqual(accepted, [base64.b64decode(item['data']) for item in sources])
+        self.assertEqual(masks, [encoded_mask.getvalue()])
+        self.assertIn(b'3840x2160', request.content)
         self.assertNotIn(b'name="quality"', request.content)
+
+    def test_single_image_edit_preserves_single_field(self):
+        self.service.execution.prefer_responses = False
+        self.submit(payload={'prompt': 'edit', 'action': 'edit', 'images': [REFERENCE]})
+        request = self.requests[0]
+        message = BytesParser(policy=default).parsebytes(
+            ('Content-Type: ' + request.headers['content-type'] + '\r\n\r\n').encode() + request.content)
+        files = [p for p in message.iter_parts() if p.get_filename()]
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0].get_param('name', header='content-disposition'), 'image')
+        self.assertEqual(files[0].get_payload(decode=True), base64.b64decode(IMAGE))
 
     def test_responses_preserves_instructions_and_uses_only_final_image(self):
         self.service.execution.prefer_responses = True

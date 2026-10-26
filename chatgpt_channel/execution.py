@@ -162,7 +162,9 @@ class Execution:
         fields.update(output_format='png', n='1')
         if value['quality'] != 'auto':
             fields['quality'] = value['quality']
-        files = [('image' if index == 0 else 'image_' + str(index),
+        # The gateway accepts image / image[]; image_1 is silently ignored.
+        image_field = 'image[]' if len(value['images']) > 1 else 'image'
+        files = [(image_field,
                   ('source.png' if index == 0 else 'source_' + str(index) + '.png', base64.b64decode(item['data']), item['mime_type']))
                  for index, item in enumerate(value['images'])]
         if value['mask']:
