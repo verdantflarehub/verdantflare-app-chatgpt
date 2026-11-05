@@ -14,10 +14,10 @@ from .profile import origin
 from .proxy import ProxyUnavailable
 from .store import Conflict, now
 
-# Compatibility identifiers from Image's existing CodexProvider, not new model claims.
-MODEL = 'gpt-image-2.5-sunburst'
-DEFAULT_MODELS = 'gpt-image-2.5-sunburst,gpt-image-2.5-flare'
-MODELS = {MODEL, 'gpt-image-2.5-flare', 'gpt-image-2'}
+# Compatibility identifiers from Image's existing CodexProvider, upgraded for OpenAI Images 2.6.
+MODEL = 'gpt-image-2.6-sunburst'
+DEFAULT_MODELS = 'gpt-image-2.6-sunburst,gpt-image-2.6-flare,gpt-image-2.5-sunburst,gpt-image-2.5-flare'
+MODELS = {MODEL, 'gpt-image-2.6-flare', 'gpt-image-2.5-sunburst', 'gpt-image-2.5-flare', 'gpt-image-2'}
 INSTRUCTIONS = (
     "When invoking the image_generation tool, use the user's image prompt verbatim. "
     "Do not rewrite, expand, summarize, embellish, translate, normalize punctuation, "
@@ -35,7 +35,7 @@ SIZES_4K = {'2048x1152': '3840x2160', '1152x2048': '2160x3840', '1024x1024': '20
 
 def payload(value):
     if not isinstance(value, dict) or set(value) - {
-            'prompt', 'action', 'size', 'prefer_4k', 'quality', 'background', 'images', 'mask', 'instructions'}:
+            'prompt', 'action', 'size', 'prefer_4k', 'quality', 'complexity', 'background', 'images', 'mask', 'instructions'}:
         raise ValueError('invalid_payload')
     if not isinstance(value.get('prompt'), str) or not value['prompt'].strip() or len(value['prompt']) > 32000:
         raise ValueError('invalid_prompt')
@@ -51,6 +51,9 @@ def payload(value):
     quality, background = value.get('quality', 'high'), value.get('background', 'auto')
     if quality not in {'auto', 'low', 'medium', 'high', 'xhigh', 'max', 'hd', 'standard'} or background not in {'auto', 'opaque', 'transparent'}:
         raise ValueError('unsupported_parameter')
+    complexity = value.get('complexity')
+    if complexity is not None and complexity not in {'low', 'medium', 'high'}:
+        raise ValueError('unsupported_parameter')
     instructions = value.get('instructions')
     if instructions is not None and (not isinstance(instructions, str) or len(instructions) > 32000):
         raise ValueError('invalid_instructions')
@@ -60,11 +63,14 @@ def payload(value):
     def checked(item):
         result = image(item, source=True)
         return {key: result[key] for key in ('mime_type', 'data')}
-    return {'prompt': value['prompt'], 'action': action, 'size': size, 'prefer_4k': prefer,
-            'quality': {'hd': 'high', 'standard': 'medium'}.get(quality, quality), 'background': background,
-            'images': [checked(item) for item in images],
-            'mask': checked(value['mask']) if value.get('mask') is not None else None,
-            'instructions': instructions}
+    normalized = {'prompt': value['prompt'], 'action': action, 'size': size, 'prefer_4k': prefer,
+                  'quality': {'hd': 'high', 'standard': 'medium'}.get(quality, quality), 'background': background,
+                  'images': [checked(item) for item in images],
+                  'mask': checked(value['mask']) if value.get('mask') is not None else None,
+                  'instructions': instructions}
+    if complexity is not None:
+        normalized['complexity'] = complexity
+    return normalized
 
 
 def final_image(data, *, sse=False):
@@ -150,12 +156,16 @@ class Execution:
             tool = {'type': 'image_generation', 'action': value['action'], 'model': model, 'size': size,
                     'quality': 'high' if value['quality'] == 'auto' else value['quality'],
                     'background': value['background'], 'output_format': 'png', 'partial_images': 3}
+            if value.get('complexity') is not None:
+                tool['complexity'] = value['complexity']
             return '/responses', {'json': {'model': self.session_model, 'instructions': value['instructions'] or INSTRUCTIONS,
                 'input': [{'type': 'message', 'role': 'user', 'content': content}], 'tools': [tool],
                 'tool_choice': {'type': 'image_generation'}, 'stream': True}}, True
         fields = {'model': model, 'prompt': prompt, 'size': size}
         if value['background'] != 'auto':
             fields['background'] = value['background']
+        if value.get('complexity') is not None:
+            fields['complexity'] = value['complexity']
         if value['action'] == 'generate':
             fields.update(quality=value['quality'], response_format='b64_json')
             return '/images/generations', {'json': fields}, False

@@ -175,7 +175,11 @@ class ExecutionTest(unittest.TestCase):
         self.assertEqual(self.api.get('/v1/calls/' + result['call_id'], headers=wrong).status_code, 403)
 
     def test_flare_model_supported_by_default(self):
-        res = self.submit('flare-task', model_id='gpt-image-2.5-flare', payload={'prompt': 'concept sketch'})
+        res = self.submit('flare-task', model_id='gpt-image-2.6-flare', payload={'prompt': 'concept sketch', 'complexity': 'medium'})
         self.assertEqual(res.status_code, 200, res.text)
         self.assertEqual(res.json()['state'], 'completed')
         self.assertTrue(res.json()['accepted'])
+        self.assertEqual(json.loads(self.requests[0].content)['complexity'], 'medium')
+        legacy = self.submit('legacy-2-5-task', model_id='gpt-image-2.5-sunburst', payload={'prompt': 'legacy test'})
+        self.assertEqual(legacy.status_code, 200, legacy.text)
+        self.assertEqual(legacy.json()['state'], 'completed')

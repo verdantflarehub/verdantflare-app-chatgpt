@@ -11,7 +11,7 @@ from chatgpt_channel.proxy import NetworkProxies, ProxyUnavailable
 from chatgpt_channel.server import ChatGPT, create_app
 from chatgpt_channel.store import Store, Conflict
 DEFAULT_ORIGIN = "https://gateway.example.invalid/v1"
-MODEL = "gpt-image-2.5-sunburst"
+MODEL = "gpt-image-2.6-sunburst"
 
 ORG = '0199b501-0000-7000-8000-000000000001'
 PID = '0199b501-0000-7000-8000-000000000002'
