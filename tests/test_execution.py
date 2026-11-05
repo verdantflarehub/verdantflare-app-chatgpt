@@ -183,3 +183,19 @@ class ExecutionTest(unittest.TestCase):
         legacy = self.submit('legacy-2-5-task', model_id='gpt-image-2.5-sunburst', payload={'prompt': 'legacy test'})
         self.assertEqual(legacy.status_code, 200, legacy.text)
         self.assertEqual(legacy.json()['state'], 'completed')
+
+    def test_cleanup_unknown_releases_reservations_and_transitions_to_rejected(self):
+        self.service.execution.prefer_responses = True
+        self.mode = 'timeout'
+        res = self.submit('zombie-1', payload={'prompt': 'test'}).json()
+        self.assertEqual(res['state'], 'acceptance_unknown')
+        self.assertEqual(self.service.calls.get('org', res['call_id'])['reservation_amount'], '2')
+        cleanup = self.api.post('/v1/calls/cleanup-unknown', headers=self.headers, json={'operation_ids': ['zombie-1']})
+        self.assertEqual(cleanup.status_code, 200, cleanup.text)
+        data = cleanup.json()
+        self.assertEqual(data['cleaned_count'], 1)
+        self.assertEqual(data['rejected_operations'], ['zombie-1'])
+        after = self.service.calls.get('org', res['call_id'])
+        self.assertEqual(after['state'], 'rejected')
+        self.assertEqual(after['accepted'], 0)
+        self.assertEqual(after['reservation_amount'], '0')
