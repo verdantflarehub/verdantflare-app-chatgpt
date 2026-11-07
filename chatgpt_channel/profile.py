@@ -45,12 +45,24 @@ def timestamp(value):
 def registration(value):
     if not isinstance(value, dict) or set(value) - {'membership_tier', 'membership_expiry',
             'used_5h_percent', 'reset_5h_at', 'used_7d_percent', 'reset_7d_at',
-            'observed_at', 'note', 'budget_limit'}:
+            'observed_at', 'note', 'budget_limit', 'concurrent_limit'}:
         raise ValueError('invalid_registration')
     result = dict(value)
     for field in ('membership_tier', 'note'):
         if field in result and (not isinstance(result[field], str) or len(result[field]) > 2000):
             raise ValueError('invalid_registration')
+    if 'concurrent_limit' in result and result['concurrent_limit'] is not None:
+        raw_limit = result['concurrent_limit']
+        if isinstance(raw_limit, bool) or not isinstance(raw_limit, (int, str)):
+            raise ValueError('invalid_registration')
+        if isinstance(raw_limit, str):
+            raw_str = raw_limit.strip()
+            if not raw_str.isascii() or not raw_str.isdigit():
+                raise ValueError('invalid_registration')
+            raw_limit = int(raw_str)
+        if not 1 <= raw_limit <= 20:
+            raise ValueError('invalid_registration')
+        result['concurrent_limit'] = raw_limit
     expiry = result.get('membership_expiry')
     if expiry is not None and not isinstance(expiry, str):
         raise ValueError('invalid_membership_expiry')

@@ -55,6 +55,8 @@ class Calls:
                 db.execute('ALTER TABLE channel_calls ADD COLUMN api_url TEXT')
             if 'proxy_json' not in columns:
                 db.execute('ALTER TABLE channel_calls ADD COLUMN proxy_json TEXT')
+            if 'concurrent_limit' not in columns:
+                db.execute('ALTER TABLE channel_calls ADD COLUMN concurrent_limit INTEGER NOT NULL DEFAULT 4')
 
     @staticmethod
     def project(row):
@@ -63,9 +65,12 @@ class Calls:
         if row.get('finished_at'):
             elapsed = max(0, int((datetime.fromisoformat(row['finished_at']) -
                                   datetime.fromisoformat(row['created_at'])).total_seconds()))
+        raw_limit = row.get('concurrent_limit')
+        concurrent_limit = raw_limit if isinstance(raw_limit, int) and 1 <= raw_limit <= 20 else 4
         return {'schema_version': 1, 'call_id': row['id'], 'task_id': row['task_id'],
                 'account_id': row['account_id'], 'model_id': row['model_id'],
                 'account_name': row.get('account_name'), 'account_status': row.get('account_status'),
+                'concurrent_limit': concurrent_limit,
                 'media': 'image', 'operation': row.get('action', 'generate'), 'duration_seconds': elapsed,
                 'duration_source': 'local_elapsed' if elapsed is not None else 'unknown',
                 'state': row['state'], 'accepted': None if row['accepted'] is None else bool(row['accepted']),
@@ -206,14 +211,17 @@ class Calls:
                              else Decimal(row['reservation_amount']) for row in charges), Decimal(0))
             if limits and committed + Decimal(ceiling) > min(limits):
                 raise Conflict('budget_exceeded')
+            account_reg = json.loads(account['registration_json']) if account['registration_json'] else {}
+            raw_limit = account_reg.get('concurrent_limit')
+            concurrent_limit = int(raw_limit) if isinstance(raw_limit, (int, str)) and str(raw_limit).isdigit() and 1 <= int(raw_limit) <= 20 else 4
             call_id, timestamp = str(uuid.uuid4()), now()
             db.execute('''INSERT INTO channel_calls
                 (id,organization_id,caller_id,operation_id,digest,task_id,account_id,credential_version,
-                 quota_subject_id,model_id,state,reservation_amount,created_at,updated_at,api_url,proxy_json,action)
-                VALUES (?,?,?,?,?,?,?,?,?,?,'acceptance_unknown',?,?,?,?,?,?)''',
+                 quota_subject_id,model_id,state,reservation_amount,created_at,updated_at,api_url,proxy_json,action,concurrent_limit)
+                VALUES (?,?,?,?,?,?,?,?,?,?,'acceptance_unknown',?,?,?,?,?,?,?)''',
                 (call_id, organization, caller, operation, digest, task, account['id'],
                  account['credential_version'], account['quota_subject_id'], model, ceiling, timestamp, timestamp,
-                 account['api_url'], account['proxy_json'], action))
+                 account['api_url'], account['proxy_json'], action, concurrent_limit))
             return dict(db.execute('SELECT * FROM channel_calls WHERE id=?', (call_id,)).fetchone()), True
 
     def credential(self, row):

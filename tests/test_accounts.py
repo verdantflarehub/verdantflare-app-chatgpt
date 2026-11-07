@@ -94,6 +94,27 @@ class ChatGPTAccountsTests(unittest.TestCase):
         for field in ('membership_expiry', 'reset_5h_at', 'reset_7d_at', 'observed_at'):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 registration({field: False})
+        for valid, expected in ((1, 1), (4, 4), (20, 20), ('4', 4), ('20', 20), (None, None)):
+            self.assertEqual(registration({'concurrent_limit': valid})['concurrent_limit'], expected)
+        for invalid in (0, 21, -1, True, False, '0', '21', '4.5', 'abc'):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                registration({'concurrent_limit': invalid})
+
+    def test_concurrent_limit_persisted_and_patched(self):
+        account = self.create({'concurrent_limit': 8, 'membership_tier': 'Pro'})
+        self.assertEqual(account['registration']['concurrent_limit'], 8)
+        url = '/v1/accounts/' + account['account_id']
+        patched = self.client.patch(url, headers=self.headers, json={
+            'expected_revision': account['revision'],
+            'registration': {**account['registration'], 'concurrent_limit': 16},
+        })
+        self.assertEqual(patched.status_code, 200, patched.text)
+        self.assertEqual(patched.json()['registration']['concurrent_limit'], 16)
+        invalid = self.client.patch(url, headers=self.headers, json={
+            'expected_revision': patched.json()['revision'],
+            'registration': {**account['registration'], 'concurrent_limit': 25},
+        })
+        self.assertEqual(invalid.status_code, 400)
 
     def test_rotation_is_atomic_and_invalidates_old_gateway_observation(self):
         account = self.create({'membership_tier': 'Pro'})

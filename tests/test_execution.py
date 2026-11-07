@@ -70,6 +70,7 @@ class ExecutionTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         result = response.json()
         self.assertEqual(result['state'], 'completed')
+        self.assertEqual(result['concurrent_limit'], 4)
         self.assertIsNone(result['budget']['amount'])
         self.assertIsNone(result['settlement']['amount'])
         self.assertEqual(self.requests[0].url.path, '/v1/images/generations')

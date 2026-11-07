@@ -1330,4 +1330,16 @@ html {
 .card > h3 + .subline + button { margin-top: 12px; }
 .card { border: 0.5px solid var(--vf-border-default, var(--line)); box-shadow: var(--vf-shadow-card, 0 1px 2px rgba(20, 20, 19, .04)); }
 
+/* v0.3 同时出图数 / 最大并发 (1~20) 滑块 + 数字输入联动控件 */
+.concurrency-control { display: flex; align-items: flex-start; gap: 10px; margin-top: 6px; width: 100%; }
+.concurrency-track-col { flex: 1; min-width: 120px; display: flex; flex-direction: column; }
+.concurrency-slider { width: 100%; accent-color: var(--accent); cursor: pointer; height: 20px; margin: 0; padding: 0; }
+.concurrency-scale { position: relative; height: 18px; margin-top: 2px; width: 100%; user-select: none; }
+.concurrency-tick { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; font-size: 11px; line-height: 1.2; color: var(--muted-2); font-variant-numeric: tabular-nums; cursor: pointer; padding: 1px 3px; border-radius: 4px; transition: color var(--vf-dur-fast) var(--vf-ease-out), font-weight var(--vf-dur-fast) var(--vf-ease-out); }
+.concurrency-tick:hover { color: var(--ink); }
+.concurrency-tick.active { color: var(--accent); font-weight: 660; }
+.concurrency-num-wrap { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: -3px; }
+.concurrency-num-input { width: 58px !important; min-height: 28px !important; padding: 2px 6px !important; text-align: center; font-weight: 600; font-size: 13px !important; font-variant-numeric: tabular-nums; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--vf-surface-3); color: var(--ink); }
+.concurrency-num-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+
 .viewport{width:100%;max-width:none;min-width:0;margin:0;padding:0}.g-form{width:100%;max-width:none}
