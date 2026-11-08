@@ -57,6 +57,8 @@ class Calls:
                 db.execute('ALTER TABLE channel_calls ADD COLUMN proxy_json TEXT')
             if 'concurrent_limit' not in columns:
                 db.execute('ALTER TABLE channel_calls ADD COLUMN concurrent_limit INTEGER NOT NULL DEFAULT 4')
+            if 'reason_code' not in columns:
+                db.execute('ALTER TABLE channel_calls ADD COLUMN reason_code TEXT')
 
     @staticmethod
     def project(row):
@@ -74,7 +76,7 @@ class Calls:
                 'media': 'image', 'operation': row.get('action', 'generate'), 'duration_seconds': elapsed,
                 'duration_source': 'local_elapsed' if elapsed is not None else 'unknown',
                 'state': row['state'], 'accepted': None if row['accepted'] is None else bool(row['accepted']),
-                'revision': row['revision'], 'reason_code': None,
+                'revision': row['revision'], 'reason_code': row.get('reason_code'),
                 'budget': {'amount': row['budget_amount'], 'unit': 'USD', 'source': 'unknown'},
                 'settlement': {'amount': row['settlement_amount'], 'unit': 'USD',
                                'source': row['settlement_source']},
@@ -239,11 +241,11 @@ class Calls:
                        "revision=revision+1,updated_at=? WHERE id=? AND accepted IS NULL",
                        (remote, now(), call_id))
 
-    def rejected(self, call_id):
+    def rejected(self, call_id, reason=None):
         with self.store.connect() as db:
             db.execute("UPDATE channel_calls SET state='rejected',accepted=0,reservation_amount='0',reservation_unknown=0,"
-                       "revision=revision+1,updated_at=?,finished_at=? WHERE id=? AND accepted IS NULL",
-                       (timestamp := now(), timestamp, call_id))
+                       "reason_code=?,revision=revision+1,updated_at=?,finished_at=? WHERE id=? AND accepted IS NULL",
+                       (reason, timestamp := now(), timestamp, call_id))
 
     def cleanup_unknown(self, organization, caller, operation_ids=None):
         timestamp = now()

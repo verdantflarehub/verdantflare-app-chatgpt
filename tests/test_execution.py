@@ -47,6 +47,24 @@ class ExecutionTest(unittest.TestCase):
                 final = {'item': {'type': 'image_generation_call', 'status': 'completed', 'result': IMAGE}}
                 return httpx.Response(200, content='data: ' + json.dumps(partial) + '\n\n'
                     + 'event: response.output_item.done\ndata: ' + json.dumps(final) + '\n\ndata: [DONE]\n\n')
+            if self.mode == 'sse_safety_refusal':
+                tool_fail = {'item': {'type': 'image_generation_call', 'status': 'failed'}}
+                msg = {'item': {'type': 'message', 'content': [{'type': 'output_text', 'text': '抱歉，我无法按原描述生成该图像。'}]}}
+                done = {'type': 'response.completed', 'response': {'id': 'resp_safety_1', 'status': 'completed', 'output': [tool_fail['item'], msg['item']]}}
+                return httpx.Response(200, content='event: response.output_item.done\ndata: ' + json.dumps(tool_fail) + '\n\n'
+                    + 'event: response.output_item.done\ndata: ' + json.dumps(msg) + '\n\n'
+                    + 'event: response.completed\ndata: ' + json.dumps(done) + '\n\ndata: [DONE]\n\n')
+            if self.mode == 'sse_text_only_refusal':
+                msg = {'item': {'type': 'message', 'content': [{'type': 'output_text', 'text': 'I cannot generate this image due to content policy.'}]}}
+                done = {'type': 'response.completed', 'response': {'id': 'resp_refusal_2', 'status': 'completed', 'output': [msg['item']]}}
+                return httpx.Response(200, content='event: response.output_item.done\ndata: ' + json.dumps(msg) + '\n\n'
+                    + 'event: response.completed\ndata: ' + json.dumps(done) + '\n\ndata: [DONE]\n\n')
+            if self.mode == 'sse_response_failed':
+                failed_ev = {'type': 'response.failed', 'response': {'id': 'resp_fail_3', 'status': 'failed'}}
+                return httpx.Response(200, content='event: response.failed\ndata: ' + json.dumps(failed_ev) + '\n\ndata: [DONE]\n\n')
+            if self.mode == 'sse_empty_completed':
+                done = {'type': 'response.completed', 'response': {'id': 'resp_empty_4', 'status': 'completed', 'output': []}}
+                return httpx.Response(200, content='event: response.completed\ndata: ' + json.dumps(done) + '\n\ndata: [DONE]\n\n')
             return httpx.Response(200, json={'data': [{'b64_json': IMAGE if self.mode == 'success' else 'malformed'}]})
         self.http = httpx.Client(transport=httpx.MockTransport(upstream))
         self.addCleanup(self.http.close)
@@ -200,3 +218,28 @@ class ExecutionTest(unittest.TestCase):
         self.assertEqual(after['state'], 'rejected')
         self.assertEqual(after['accepted'], 0)
         self.assertEqual(after['reservation_amount'], '0')
+
+    def test_sse_policy_refusal_and_terminal_failures_transition_to_failed_with_reason_code(self):
+        self.service.execution.prefer_responses = True
+        cases = [
+            ('sse_safety_refusal', 'image_safety', 'resp_safety_1'),
+            ('sse_text_only_refusal', 'image_safety', 'resp_refusal_2'),
+            ('sse_response_failed', 'upstream_failed', 'resp_fail_3'),
+            ('sse_empty_completed', 'no_image_returned', 'resp_empty_4'),
+        ]
+        for mode, expected_reason, expected_pid in cases:
+            with self.subTest(mode=mode):
+                self.mode = mode
+                res = self.submit(f'op-{mode}', payload={'prompt': 'edit', 'action': 'edit', 'images': [REFERENCE]}).json()
+                self.assertEqual(res['state'], 'failed')
+                self.assertTrue(res['accepted'])
+                self.assertEqual(res['reason_code'], expected_reason)
+                row = self.service.calls.get('org', res['call_id'])
+                self.assertEqual(row['state'], 'failed')
+                self.assertEqual(row['accepted'], 1)
+                self.assertEqual(row['reason_code'], expected_reason)
+                self.assertEqual(row['provider_request_id'], expected_pid)
+                # Idempotent re-read via POST /v1/calls or GET returns the same failed state without re-POSTing
+                again = self.submit(f'op-{mode}', payload={'prompt': 'edit', 'action': 'edit', 'images': [REFERENCE]}).json()
+                self.assertEqual(again['state'], 'failed')
+                self.assertEqual(again['reason_code'], expected_reason)

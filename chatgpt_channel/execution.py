@@ -73,6 +73,59 @@ def payload(value):
     return normalized
 
 
+class UpstreamGenerationFailed(Exception):
+    def __init__(self, reason_code: str, provider_id: str | None = None):
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+        self.provider_id = provider_id
+
+
+def _classify_sse_failure(events) -> tuple[str | None, str | None]:
+    has_refusal_text = False
+    has_tool_failure = False
+    has_response_failure = False
+    has_response_completed = False
+    provider_id = None
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        ev_type = event.get('type')
+        resp = event.get('response') if isinstance(event.get('response'), dict) else {}
+        rid = resp.get('id') or event.get('response_id')
+        if isinstance(rid, str) and rid.strip() and len(rid) <= 256:
+            provider_id = rid.strip()
+        if ev_type in {'response.failed', 'error'}:
+            has_response_failure = True
+        if ev_type == 'response.completed':
+            has_response_completed = True
+            if resp.get('status') in {'failed', 'incomplete', 'cancelled'}:
+                has_response_failure = True
+            for out_item in resp.get('output', []):
+                if not isinstance(out_item, dict):
+                    continue
+                if out_item.get('type') == 'image_generation_call' and out_item.get('status') in {'failed', 'incomplete', 'cancelled'}:
+                    has_tool_failure = True
+                elif out_item.get('type') == 'message':
+                    for part in out_item.get('content', []):
+                        if isinstance(part, dict) and part.get('type') in {'output_text', 'refusal'} and str(part.get('text') or part.get('refusal') or '').strip():
+                            has_refusal_text = True
+        item = event.get('item')
+        if isinstance(item, dict):
+            if item.get('type') == 'image_generation_call' and item.get('status') in {'failed', 'incomplete', 'cancelled'}:
+                has_tool_failure = True
+            elif item.get('type') == 'message':
+                for part in item.get('content', []):
+                    if isinstance(part, dict) and part.get('type') in {'output_text', 'refusal'} and str(part.get('text') or part.get('refusal') or '').strip():
+                        has_refusal_text = True
+    if has_tool_failure or (has_refusal_text and (has_response_completed or has_response_failure)):
+        return 'image_safety', provider_id
+    if has_response_failure:
+        return 'upstream_failed', provider_id
+    if has_response_completed:
+        return 'no_image_returned', provider_id
+    return None, provider_id
+
+
 def final_image(data, *, sse=False):
     """Only complete image results count; partial stream frames are never final."""
     encoded = None
@@ -87,9 +140,19 @@ def final_image(data, *, sse=False):
                 for item in response.get('output', []):
                     if item.get('type') == 'image_generation_call' and item.get('status') == 'completed':
                         encoded = item.get('result')
+        if not isinstance(encoded, str):
+            reason_code, provider_id = _classify_sse_failure(data)
+            if reason_code is not None:
+                raise UpstreamGenerationFailed(reason_code, provider_id)
     else:
-        items = data.get('data')
-        if isinstance(items, list) and len(items) == 1:
+        if isinstance(data, dict) and data.get('error'):
+            err = data.get('error')
+            code = str(err.get('code') or err.get('type') or '').lower() if isinstance(err, dict) else ''
+            msg = str(err.get('message') or err).lower() if isinstance(err, dict) else str(err).lower()
+            reason = 'image_safety' if any(k in code or k in msg for k in ('safety', 'policy', 'moderation', 'content_filter')) else 'upstream_failed'
+            raise UpstreamGenerationFailed(reason)
+        items = data.get('data') if isinstance(data, dict) else None
+        if isinstance(items, list) and len(items) == 1 and isinstance(items[0], dict):
             encoded = items[0].get('b64_json')
     if not isinstance(encoded, str) or len(encoded) > MAX_BYTES * 4 // 3 + 4:
         raise ValueError('missing_final_image')
@@ -210,21 +273,29 @@ class Execution:
         except ProxyUnavailable:
             self.calls.rejected(row['id'])
             raise Conflict('proxy_unavailable') from None
+        except UpstreamGenerationFailed as exc:
+            self.finish(row['id'], None, reason_code=exc.reason_code, provider_id=exc.provider_id)
         except (httpx.HTTPError, ValueError, TypeError, KeyError, AttributeError, OSError, Image.DecompressionBombError):
             pass
         return self.calls.project(self.calls.get(organization, row['id'], caller))
 
-    def finish(self, call_id, output):
+    def finish(self, call_id, output, *, reason_code=None, provider_id=None):
         timestamp = now()
         with self.calls.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT state FROM channel_calls WHERE id=?', (call_id,)).fetchone()
             if row is None or row['state'] != 'acceptance_unknown':
                 return
-            encrypted = self.calls.store.cipher.encrypt(json.dumps(output).encode())
-            db.execute('INSERT INTO channel_results VALUES (?,?,?)', (call_id, encrypted, timestamp))
-            db.execute("UPDATE channel_calls SET state='completed',accepted=1,updated_at=?,finished_at=?,revision=revision+1 WHERE id=?",
-                       (timestamp, timestamp, call_id))
+            if output is not None:
+                encrypted = self.calls.store.cipher.encrypt(json.dumps(output).encode())
+                db.execute('INSERT INTO channel_results VALUES (?,?,?)', (call_id, encrypted, timestamp))
+                db.execute("UPDATE channel_calls SET state='completed',accepted=1,provider_request_id=COALESCE(?,provider_request_id),"
+                           "updated_at=?,finished_at=?,revision=revision+1 WHERE id=?",
+                           (provider_id, timestamp, timestamp, call_id))
+            else:
+                db.execute("UPDATE channel_calls SET state='failed',accepted=1,provider_request_id=COALESCE(?,provider_request_id),"
+                           "reason_code=?,updated_at=?,finished_at=?,revision=revision+1 WHERE id=?",
+                           (provider_id, reason_code, timestamp, timestamp, call_id))
 
     def result(self, organization, caller, call_id):
         row = self.calls.get(organization, call_id, caller)
