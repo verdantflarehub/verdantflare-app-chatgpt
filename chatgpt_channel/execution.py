@@ -74,18 +74,27 @@ def payload(value):
 
 
 class UpstreamGenerationFailed(Exception):
-    def __init__(self, reason_code: str, provider_id: str | None = None):
+    def __init__(self, reason_code: str, provider_id: str | None = None, detail: str | None = None):
         super().__init__(reason_code)
         self.reason_code = reason_code
         self.provider_id = provider_id
+        self.detail = detail
 
 
-def _classify_sse_failure(events) -> tuple[str | None, str | None]:
-    has_refusal_text = False
+def _classify_sse_failure(events) -> tuple[str | None, str | None, str | None]:
+    refusal_texts: list[str] = []
+    tool_errors: list[str] = []
+    response_errors: list[str] = []
     has_tool_failure = False
     has_response_failure = False
     has_response_completed = False
     provider_id = None
+
+    def _add_unique(target: list[str], text: str):
+        cleaned = text.strip()
+        if cleaned and cleaned not in target:
+            target.append(cleaned)
+
     for event in events:
         if not isinstance(event, dict):
             continue
@@ -96,34 +105,51 @@ def _classify_sse_failure(events) -> tuple[str | None, str | None]:
             provider_id = rid.strip()
         if ev_type in {'response.failed', 'error'}:
             has_response_failure = True
+            err_obj = event.get('error') or resp.get('error') or resp.get('incomplete_details')
+            if isinstance(err_obj, dict):
+                msg = str(err_obj.get('message') or err_obj.get('reason') or err_obj.get('code') or '').strip()
+                if msg:
+                    _add_unique(response_errors, msg)
+            elif isinstance(err_obj, str) and err_obj.strip():
+                _add_unique(response_errors, err_obj)
         if ev_type == 'response.completed':
             has_response_completed = True
             if resp.get('status') in {'failed', 'incomplete', 'cancelled'}:
                 has_response_failure = True
+                err_obj = resp.get('error') or resp.get('incomplete_details')
+                if isinstance(err_obj, dict):
+                    msg = str(err_obj.get('message') or err_obj.get('reason') or err_obj.get('code') or '').strip()
+                    if msg:
+                        _add_unique(response_errors, msg)
             for out_item in resp.get('output', []):
                 if not isinstance(out_item, dict):
                     continue
                 if out_item.get('type') == 'image_generation_call' and out_item.get('status') in {'failed', 'incomplete', 'cancelled'}:
                     has_tool_failure = True
+                    _add_unique(tool_errors, f"image_generation_call status={out_item.get('status')}")
                 elif out_item.get('type') == 'message':
                     for part in out_item.get('content', []):
-                        if isinstance(part, dict) and part.get('type') in {'output_text', 'refusal'} and str(part.get('text') or part.get('refusal') or '').strip():
-                            has_refusal_text = True
+                        if isinstance(part, dict) and part.get('type') in {'output_text', 'refusal'}:
+                            _add_unique(refusal_texts, str(part.get('text') or part.get('refusal') or ''))
         item = event.get('item')
         if isinstance(item, dict):
             if item.get('type') == 'image_generation_call' and item.get('status') in {'failed', 'incomplete', 'cancelled'}:
                 has_tool_failure = True
+                _add_unique(tool_errors, f"image_generation_call status={item.get('status')}")
             elif item.get('type') == 'message':
                 for part in item.get('content', []):
-                    if isinstance(part, dict) and part.get('type') in {'output_text', 'refusal'} and str(part.get('text') or part.get('refusal') or '').strip():
-                        has_refusal_text = True
-    if has_tool_failure or (has_refusal_text and (has_response_completed or has_response_failure)):
-        return 'image_safety', provider_id
+                    if isinstance(part, dict) and part.get('type') in {'output_text', 'refusal'}:
+                        _add_unique(refusal_texts, str(part.get('text') or part.get('refusal') or ''))
+    detail = ' '.join(refusal_texts) or '; '.join(response_errors) or '; '.join(tool_errors) or None
+    if detail and len(detail) > 2000:
+        detail = detail[:2000]
+    if has_tool_failure or ( bool(refusal_texts) and (has_response_completed or has_response_failure)):
+        return 'image_safety', provider_id, detail
     if has_response_failure:
-        return 'upstream_failed', provider_id
+        return 'upstream_failed', provider_id, detail
     if has_response_completed:
-        return 'no_image_returned', provider_id
-    return None, provider_id
+        return 'no_image_returned', provider_id, detail
+    return None, provider_id, None
 
 
 def final_image(data, *, sse=False):
@@ -141,16 +167,17 @@ def final_image(data, *, sse=False):
                     if item.get('type') == 'image_generation_call' and item.get('status') == 'completed':
                         encoded = item.get('result')
         if not isinstance(encoded, str):
-            reason_code, provider_id = _classify_sse_failure(data)
+            reason_code, provider_id, detail = _classify_sse_failure(data)
             if reason_code is not None:
-                raise UpstreamGenerationFailed(reason_code, provider_id)
+                raise UpstreamGenerationFailed(reason_code, provider_id, detail)
     else:
         if isinstance(data, dict) and data.get('error'):
             err = data.get('error')
             code = str(err.get('code') or err.get('type') or '').lower() if isinstance(err, dict) else ''
-            msg = str(err.get('message') or err).lower() if isinstance(err, dict) else str(err).lower()
+            raw_msg = str(err.get('message') or err).strip() if isinstance(err, dict) else str(err).strip()
+            msg = raw_msg.lower()
             reason = 'image_safety' if any(k in code or k in msg for k in ('safety', 'policy', 'moderation', 'content_filter')) else 'upstream_failed'
-            raise UpstreamGenerationFailed(reason)
+            raise UpstreamGenerationFailed(reason, detail=raw_msg[:2000] if raw_msg else None)
         items = data.get('data') if isinstance(data, dict) else None
         if isinstance(items, list) and len(items) == 1 and isinstance(items[0], dict):
             encoded = items[0].get('b64_json')
@@ -274,13 +301,14 @@ class Execution:
             self.calls.rejected(row['id'])
             raise Conflict('proxy_unavailable') from None
         except UpstreamGenerationFailed as exc:
-            self.finish(row['id'], None, reason_code=exc.reason_code, provider_id=exc.provider_id)
+            self.finish(row['id'], None, reason_code=exc.reason_code, provider_id=exc.provider_id, error_detail=exc.detail)
         except (httpx.HTTPError, ValueError, TypeError, KeyError, AttributeError, OSError, Image.DecompressionBombError):
             pass
         return self.calls.project(self.calls.get(organization, row['id'], caller))
 
-    def finish(self, call_id, output, *, reason_code=None, provider_id=None):
+    def finish(self, call_id, output, *, reason_code=None, provider_id=None, error_detail=None):
         timestamp = now()
+        error_json = json.dumps({'code': reason_code, 'message': error_detail}, ensure_ascii=False) if error_detail else None
         with self.calls.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT state FROM channel_calls WHERE id=?', (call_id,)).fetchone()
@@ -294,8 +322,8 @@ class Execution:
                            (provider_id, timestamp, timestamp, call_id))
             else:
                 db.execute("UPDATE channel_calls SET state='failed',accepted=1,provider_request_id=COALESCE(?,provider_request_id),"
-                           "reason_code=?,updated_at=?,finished_at=?,revision=revision+1 WHERE id=?",
-                           (provider_id, reason_code, timestamp, timestamp, call_id))
+                           "reason_code=?,error_json=?,updated_at=?,finished_at=?,revision=revision+1 WHERE id=?",
+                           (provider_id, reason_code, error_json, timestamp, timestamp, call_id))
 
     def result(self, organization, caller, call_id):
         row = self.calls.get(organization, call_id, caller)

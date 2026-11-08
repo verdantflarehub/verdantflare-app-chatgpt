@@ -222,18 +222,20 @@ class ExecutionTest(unittest.TestCase):
     def test_sse_policy_refusal_and_terminal_failures_transition_to_failed_with_reason_code(self):
         self.service.execution.prefer_responses = True
         cases = [
-            ('sse_safety_refusal', 'image_safety', 'resp_safety_1'),
-            ('sse_text_only_refusal', 'image_safety', 'resp_refusal_2'),
-            ('sse_response_failed', 'upstream_failed', 'resp_fail_3'),
-            ('sse_empty_completed', 'no_image_returned', 'resp_empty_4'),
+            ('sse_safety_refusal', 'image_safety', 'resp_safety_1', '抱歉，我无法按原描述生成该图像。'),
+            ('sse_text_only_refusal', 'image_safety', 'resp_refusal_2', 'I cannot generate this image due to content policy.'),
+            ('sse_response_failed', 'upstream_failed', 'resp_fail_3', None),
+            ('sse_empty_completed', 'no_image_returned', 'resp_empty_4', None),
         ]
-        for mode, expected_reason, expected_pid in cases:
+        for mode, expected_reason, expected_pid, expected_msg in cases:
             with self.subTest(mode=mode):
                 self.mode = mode
                 res = self.submit(f'op-{mode}', payload={'prompt': 'edit', 'action': 'edit', 'images': [REFERENCE]}).json()
                 self.assertEqual(res['state'], 'failed')
                 self.assertTrue(res['accepted'])
                 self.assertEqual(res['reason_code'], expected_reason)
+                if expected_msg:
+                    self.assertEqual(res['error'], {'code': expected_reason, 'message': expected_msg})
                 row = self.service.calls.get('org', res['call_id'])
                 self.assertEqual(row['state'], 'failed')
                 self.assertEqual(row['accepted'], 1)

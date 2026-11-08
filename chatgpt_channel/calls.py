@@ -59,6 +59,8 @@ class Calls:
                 db.execute('ALTER TABLE channel_calls ADD COLUMN concurrent_limit INTEGER NOT NULL DEFAULT 4')
             if 'reason_code' not in columns:
                 db.execute('ALTER TABLE channel_calls ADD COLUMN reason_code TEXT')
+            if 'error_json' not in columns:
+                db.execute('ALTER TABLE channel_calls ADD COLUMN error_json TEXT')
 
     @staticmethod
     def project(row):
@@ -69,6 +71,7 @@ class Calls:
                                   datetime.fromisoformat(row['created_at'])).total_seconds()))
         raw_limit = row.get('concurrent_limit')
         concurrent_limit = raw_limit if isinstance(raw_limit, int) and 1 <= raw_limit <= 20 else 4
+        error_detail = json.loads(row.get('error_json') or 'null')
         return {'schema_version': 1, 'call_id': row['id'], 'task_id': row['task_id'],
                 'account_id': row['account_id'], 'model_id': row['model_id'],
                 'account_name': row.get('account_name'), 'account_status': row.get('account_status'),
@@ -77,6 +80,7 @@ class Calls:
                 'duration_source': 'local_elapsed' if elapsed is not None else 'unknown',
                 'state': row['state'], 'accepted': None if row['accepted'] is None else bool(row['accepted']),
                 'revision': row['revision'], 'reason_code': row.get('reason_code'),
+                'error': error_detail,
                 'budget': {'amount': row['budget_amount'], 'unit': 'USD', 'source': 'unknown'},
                 'settlement': {'amount': row['settlement_amount'], 'unit': 'USD',
                                'source': row['settlement_source']},
