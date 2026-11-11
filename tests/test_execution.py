@@ -155,6 +155,12 @@ class ExecutionTest(unittest.TestCase):
         self.assertEqual(body['tools'][0]['action'], 'edit')
         self.assertEqual(body['tools'][0]['quality'], 'high')
         self.assertEqual(body['input'][0]['content'][0]['image_url'], 'data:image/png;base64,' + IMAGE)
+        self.assertEqual(body['input'][0]['content'][1]['text'], '[Aspect Ratio 16:9] edit')
+
+        res_916 = self.submit('op-916', payload={'prompt': 'vertical stone bridge', 'size': '1152x2048'}).json()
+        self.assertEqual(res_916['state'], 'completed')
+        body_916 = json.loads(self.requests[-1].content)
+        self.assertEqual(body_916['input'][0]['content'][0]['text'], '[Aspect Ratio 9:16] vertical stone bridge')
 
     def test_partial_stream_timeout_and_http_errors_never_fallback_or_resubmit(self):
         self.service.execution.prefer_responses = True

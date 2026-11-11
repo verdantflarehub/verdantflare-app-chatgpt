@@ -2,6 +2,7 @@
 import base64
 import io
 import json
+import math
 import os
 import re
 from contextlib import nullcontext
@@ -29,8 +30,20 @@ NEGATIVE_BLOCK = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 SIZES_4K = {'2048x1152': '3840x2160', '1152x2048': '2160x3840', '1024x1024': '2048x2048',
-            '1792x1344': '2880x2160', '1344x1792': '2160x2880',
+            '2048x2048': '2048x2048', '1792x1344': '2880x2160', '1344x1792': '2160x2880',
             '1536x1024': '3072x2048', '1024x1536': '2048x3072'}
+
+
+def _aspect_ratio_tag(size: str) -> str | None:
+    try:
+        width, height = map(int, size.split('x'))
+    except (ValueError, AttributeError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    divisor = math.gcd(width, height)
+    ratio = f'{width // divisor}:{height // divisor}'
+    return ratio if ratio in {'16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '1:1'} else None
 
 
 def payload(value):
@@ -241,8 +254,10 @@ class Execution:
             size = SIZES_4K.get(size, '2160x3840' if width < height else '2048x2048' if width == height else '3840x2160')
         prompt = re.sub(r'\n{3,}', '\n\n', NEGATIVE_BLOCK.sub('\n', value['prompt'])).strip() if self.sanitize else value['prompt']
         if self.prefer_responses and value['mask'] is None:
+            ratio = _aspect_ratio_tag(size)
+            resp_prompt = f'[Aspect Ratio {ratio}] {prompt}' if (ratio and ratio not in prompt) else prompt
             content = [{'type': 'input_image', 'image_url': 'data:' + item['mime_type'] + ';base64,' + item['data']} for item in value['images']]
-            content.append({'type': 'input_text', 'text': prompt})
+            content.append({'type': 'input_text', 'text': resp_prompt})
             tool = {'type': 'image_generation', 'action': value['action'], 'model': model, 'size': size,
                     'quality': 'high' if value['quality'] == 'auto' else value['quality'],
                     'background': value['background'], 'output_format': 'png', 'partial_images': 3}
